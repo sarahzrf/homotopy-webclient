@@ -115,6 +115,14 @@ export class Diagram3D extends React.Component {
     this.renderer.setSize(width, height);
     this.diagramRef.current.appendChild(this.renderer.domElement);
 
+    this.plane1 = new THREE.Plane();
+    this.plane2 = new THREE.Plane();
+    this.plane2.normal.negate();
+    this.animatingClip = false;
+    this.clipFunc = null;
+    window.diagram = this;
+    window.THREE = THREE;
+
     // Create point light
     let point_light_strength = 0x777777;
     this.camera.add(this.createPointLight(point_light_strength, +20, +20, +20));
@@ -162,6 +170,41 @@ export class Diagram3D extends React.Component {
 
     // Start the rendering loop
     //this.startLoop();
+  }
+
+  enableClip() {
+    this.renderer.clippingPlanes = [this.plane1, this.plane2];
+    this.renderSceneOnce();
+  }
+  disableClip() {
+    this.renderer.clippingPlanes = [];
+    this.renderSceneOnce();
+  }
+  setClipPos(z, w) {
+    this.plane1.constant = z;
+    this.plane2.constant = w - z;
+    if (this.renderer.clippingPlanes !== []) this.renderSceneOnce();
+  }
+
+  animateClip(fr) {
+    let func = this.clipFunc;
+    if (func) {
+      let [z, w] = func(fr);
+      this.setClipPos(z, w);
+    }
+    if (this.animatingClip) requestAnimationFrame(this.animateClip.bind(this));
+  }
+  setClipFunc(f) { // diagram.setClipFunc(fr => [9 - ((fr / 250) %  18), 0.1])
+    this.clipFunc = f;
+  }
+  startAnimatingClip(f) {
+    if (f) this.setClipFunc(f);
+    if (this.animatingClip) return;
+    this.animatingClip = true;
+    requestAnimationFrame(this.animateClip.bind(this));
+  }
+  stopAnimatingClip() {
+    this.animatingClip = false;
   }
 
   onMouseMove(event) {
@@ -346,6 +389,7 @@ export class Diagram3D extends React.Component {
         return true;
       }
     }
+    if (this.props.clip_pos != nextProps.clip_pos) return true;
     return false;
 
 

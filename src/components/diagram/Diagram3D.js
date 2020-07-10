@@ -86,6 +86,19 @@ export class Diagram3D extends React.Component {
       this.gui.add(this, 'flatShading').onChange(this.changedGUI.bind(this));
       this.gui.add(this, 'polygonOffsetFactor', 0, 3).step(1).onChange(this.buildScene.bind(this));
       this.gui.add(this, 'polygonOffsetUnits', 0, 3).step(1).onChange(this.buildScene.bind(this));
+
+      let animate_obj = {
+        start_clip: () => {
+          this.enableClip();
+          this.startAnimatingClip(this.slideFocused());
+        },
+        stop_clip: () => {
+          this.stopAnimatingClip();
+          this.disableClip();
+        }
+      };
+      this.gui.add(animate_obj, 'start_clip').name('Start clipping');
+      this.gui.add(animate_obj, 'stop_clip').name('Stop clipping');
     }
 
     // Create scene
@@ -120,8 +133,9 @@ export class Diagram3D extends React.Component {
     this.plane2.normal.negate();
     this.animatingClip = false;
     this.clipFunc = null;
-    window.diagram = this;
-    window.THREE = THREE;
+    this.box = new THREE.Box3();
+    // window.diagram = this;
+    // window.THREE = THREE;
 
     // Create point light
     let point_light_strength = 0x777777;
@@ -180,21 +194,26 @@ export class Diagram3D extends React.Component {
     this.renderer.clippingPlanes = [];
     this.renderSceneOnce();
   }
-  setClipPos(z, w) {
+  setClipPosAbs(z, w) {
     this.plane1.constant = z;
     this.plane2.constant = w - z;
     if (this.renderer.clippingPlanes !== []) this.renderSceneOnce();
+  }
+  setClipPos(z, w) {
+    let absZ = (1 - z) * this.box.min.x + z * this.box.max.x,
+        absW = w * (this.box.max.x - this.box.min.x);
+    this.setClipPosAbs(absZ, absW);
   }
 
   animateClip(fr) {
     let func = this.clipFunc;
     if (func) {
       let [z, w] = func(fr);
-      this.setClipPos(z, w);
+      this.setClipPosAbs(z, w);
     }
     if (this.animatingClip) requestAnimationFrame(this.animateClip.bind(this));
   }
-  setClipFunc(f) { // diagram.setClipFunc(fr => [9 - ((fr / 250) %  18), 0.1])
+  setClipFunc(f) {
     this.clipFunc = f;
   }
   startAnimatingClip(f) {
@@ -206,6 +225,50 @@ export class Diagram3D extends React.Component {
   stopAnimatingClip() {
     this.animatingClip = false;
   }
+  pl(int0, endY, points) {
+    let intervals = [int0],
+        prev = int0;
+    for (const {startY, slope} of points) {
+      let startX = prev.startX + (startY - prev.startY) / prev.slope;
+      prev = {startX, startY, slope};
+      intervals.push(prev);
+    }
+    let f = x => {
+      var interval = intervals[0];
+      for (const next of intervals) {
+        if (next.startX <= x) interval = next;
+        else break;
+      }
+      return interval.startY + (x - interval.startX) * interval.slope;
+    };
+    let endX = prev.startX + (endY - prev.startY) / prev.slope;
+    return {f, endX};
+  }
+  bracketCriticals() {
+    if (!this.critical.length) return [];
+    let xs = this.critical.map(v => v.x),
+        prevX = xs.shift(),
+        points = [{startY: prevX - 0.2, slope: 0.1}];
+    for (const x of xs) {
+      if (x - prevX > 0.4) {
+        points.push({startY: prevX + 0.2, slope: 1});
+        points.push({startY: x - 0.2, slope: 0.1});
+      }
+      prevX = x;
+    }
+    points.push({startY: prevX + 0.2, slope: 1});
+    return points;
+  }
+  slideFocused(speed, w) {
+    // TODO figure out a better way of picking a speed
+    if (speed === undefined) speed = (this.box.max.x - this.box.min.x) * 500;
+    if (w === undefined) w = 0.01 * (this.box.max.x - this.box.min.x);
+    let start = {startX: 0, startY: this.box.min.x, slope: 1},
+        points = this.bracketCriticals(),
+        {f, endX} = this.pl(start, this.box.max.x, points);
+    return fr => [f((fr % speed) / (speed / endX)), w];
+  }
+  // diagram.enableClip(); diagram.startAnimatingClip(diagram.slideFocused());
 
   onMouseMove(event) {
 
@@ -346,7 +409,7 @@ export class Diagram3D extends React.Component {
     return light;
   }
 
-  shouldComponentUpdate(nextProps, nextState) {
+  needRebuild(nextProps, nextState) {
     let old_diagram = this.diagramToRender;
     let new_diagram = nextProps.diagram.getSlice(...nextProps.slice);
 
@@ -357,8 +420,8 @@ export class Diagram3D extends React.Component {
     }
 
 
-    if (Math.abs(this.props.width - nextProps.width) > 5) return true;
-    if (Math.abs(this.props.height - nextProps.height) > 5) return true;
+    // if (Math.abs(this.props.width - nextProps.width) > 5) return true;
+    // if (Math.abs(this.props.height - nextProps.height) > 5) return true;
     if (this.props.projection != nextProps.projection) return true;
 
     //let old_diagram = this.props.diagram;
@@ -389,7 +452,6 @@ export class Diagram3D extends React.Component {
         return true;
       }
     }
-    if (this.props.clip_pos != nextProps.clip_pos) return true;
     return false;
 
 
@@ -412,6 +474,12 @@ export class Diagram3D extends React.Component {
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(width, height);
     }
+
+    if (!this.needRebuild(oldProps, oldState)) return;
+
+    this.animatingClip = false;
+    this.clipFunc = null;
+    this.renderer.clippingPlanes = [];
 
     // Maybe we need to animate
     let { diagram, dimension, slice, generators } = this.props;
@@ -560,6 +628,7 @@ export class Diagram3D extends React.Component {
       this.scene.remove(object);
     }
     this.objects = [];
+    this.critical = [];
 
     // Discard all the materials because they may have changed
     this.materials.clear();
@@ -577,6 +646,9 @@ export class Diagram3D extends React.Component {
       this.updateScene();
       this.animated = true;
     }
+
+    this.box.setFromObject(this.scene);
+    this.critical.sort((v, w) => v.x - w.x);
 
     this.renderSceneOnce();
   }
@@ -687,6 +759,7 @@ export class Diagram3D extends React.Component {
       new_mesh.position.set(vector.x, vector.y, vector.z);
       this.scene.add(new_mesh);
       this.objects.push(new_mesh);
+      this.critical.push(vector);
     }
 
     // Sort the vertices in each edge by height
